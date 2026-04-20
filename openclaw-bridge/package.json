@@ -1,0 +1,45 @@
+{
+  "name": "openclaw-bridge",
+  "version": "1.0.0",
+  "description": "OpenClaw bridge channel — receives messages via local HTTP and forwards to gateway",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "src/",
+    "index.ts",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "2026.3.23",
+    "typescript": "^5.8.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "openclaw-bridge",
+      "label": "openclaw-bridge",
+      "selectionLabel": "openclaw-bridge",
+      "docsPath": "/channels/openclaw-bridge",
+      "docsLabel": "openclaw-bridge",
+      "blurb": "Local HTTP bridge for external message routing",
+      "order": 80
+    },
+    "install": {
+      "npmSpec": "openclaw-bridge",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.22"
+    }
+  }
+}

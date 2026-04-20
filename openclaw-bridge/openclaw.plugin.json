@@ -1,0 +1,12 @@
+{
+  "id": "openclaw-bridge",
+  "version": "1.0.0",
+  "channels": [
+    "openclaw-bridge"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
