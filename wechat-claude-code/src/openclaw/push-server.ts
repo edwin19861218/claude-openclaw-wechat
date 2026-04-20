@@ -3,6 +3,7 @@ import { logger } from '../logger.js';
 import { saveContact, loadContact } from './contact-store.js';
 
 const MAX_MESSAGE_LENGTH = 2048;
+const MAX_BODY_SIZE = 1 << 20; // 1 MB
 
 function splitMessage(text: string, maxLen: number = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= maxLen) return [text];
@@ -38,6 +39,14 @@ export function startPushServer(
 
   return new Promise((resolve) => {
     const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      // Only allow requests from localhost
+      const remoteAddr = req.socket.remoteAddress ?? '';
+      if (remoteAddr !== '127.0.0.1' && remoteAddr !== '::1' && remoteAddr !== '::ffff:127.0.0.1') {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Forbidden' }));
+        return;
+      }
+
       if (req.method !== 'POST' || req.url !== '/push') {
         res.writeHead(404);
         res.end('not found');
@@ -45,8 +54,22 @@ export function startPushServer(
       }
 
       let body = '';
-      req.on('data', (chunk) => { body += chunk; });
+      let bodySize = 0;
+      let bodyTooLarge = false;
+      req.on('data', (chunk) => {
+        if (bodyTooLarge) return;
+        bodySize += chunk.length;
+        if (bodySize > MAX_BODY_SIZE) {
+          bodyTooLarge = true;
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'request body too large' }));
+          req.destroy();
+          return;
+        }
+        body += chunk;
+      });
       req.on('end', async () => {
+        if (bodyTooLarge) return;
         try {
           const data = JSON.parse(body) as {
             toUserId?: string;

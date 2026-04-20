@@ -6,6 +6,8 @@ const logger = createLogger("bridge:http");
 
 export type MessageHandler = (msg: BridgeMessage) => Promise<BridgeResponse>;
 
+const MAX_BODY_SIZE = 1 << 20; // 1 MB
+
 export interface HttpServerOptions {
   port: number;
   host?: string;
@@ -16,14 +18,11 @@ export function startHttpServer(opts: HttpServerOptions): Promise<http.Server> {
   const { port, host = "127.0.0.1", onMessage } = opts;
 
   const server = http.createServer(async (req, res) => {
-    // CORS for local dev
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
+    // Only allow requests from localhost
+    const remoteAddr = req.socket.remoteAddress ?? "";
+    if (remoteAddr !== "127.0.0.1" && remoteAddr !== "::1" && remoteAddr !== "::ffff:127.0.0.1") {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "Forbidden" }));
       return;
     }
 
@@ -40,7 +39,7 @@ export function startHttpServer(opts: HttpServerOptions): Promise<http.Server> {
     // POST /message
     if (req.method === "POST" && url.pathname === "/message") {
       try {
-        const raw = await readBody(req);
+        const raw = await readBody(req, MAX_BODY_SIZE);
         const msg: BridgeMessage = JSON.parse(raw);
 
         if (!msg.from || !msg.text) {
@@ -49,7 +48,7 @@ export function startHttpServer(opts: HttpServerOptions): Promise<http.Server> {
           return;
         }
 
-        logger.info(`message from=${msg.from} text="${msg.text.slice(0, 60)}${msg.text.length > 60 ? "..." : ""}"`);
+        logger.info(`message from=${msg.from} length=${msg.text.length}`);
         const result = await onMessage(msg);
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -83,10 +82,19 @@ export function stopHttpServer(server: http.Server): Promise<void> {
   });
 }
 
-function readBody(req: http.IncomingMessage): Promise<string> {
+function readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let total = 0;
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        reject(new Error(`request body exceeds ${maxBytes} bytes`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
     req.on("error", reject);
   });

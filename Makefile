@@ -1,8 +1,10 @@
 ROOT_DIR   := $(shell pwd)
 BRIDGE_DIR := $(ROOT_DIR)/openclaw-bridge
 WCC_DIR    := $(ROOT_DIR)/wechat-claude-code
+SKILLS_DIR := $(HOME)/.claude/skills
+WCC_SKILL  := $(SKILLS_DIR)/wechat-claude-code
 
-.PHONY: build install restart verify clean help
+.PHONY: build install restart restart-gateway restart-wcc verify clean help
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -27,11 +29,16 @@ build-wcc:
 
 # ── 安装 ──────────────────────────────────────────────
 
-install: build ## 构建 + 安装 bridge 插件到 OpenClaw
+install: build ## 构建 + 安装 bridge 插件 + 链接 wcc 到 Claude Code skills
 	@echo "==> 安装 openclaw-bridge 插件"
 	openclaw plugins install --force $(BRIDGE_DIR) 2>&1
 	openclaw config set channels.openclaw-bridge.enabled true 2>/dev/null || true
 	openclaw config set channels.openclaw-bridge.port 3847 2>/dev/null || true
+	@echo "==> 复制 wechat-claude-code 到 $(SKILLS_DIR)"
+	@mkdir -p $(SKILLS_DIR)
+	@rm -rf $(WCC_SKILL)
+	@cp -R $(WCC_DIR) $(WCC_SKILL)
+	@echo "  已复制到 $(WCC_SKILL)"
 	@echo "==> 安装完成"
 
 # ── 重启 ──────────────────────────────────────────────
@@ -43,20 +50,9 @@ restart-gateway: ## 仅重启 OpenClaw gateway
 	@curl -sf http://localhost:3847/health >/dev/null 2>&1 && echo "==> gateway 已就绪" || echo "==> gateway 可能还在启动中"
 
 restart-wcc: ## 仅重启 wcc daemon
-	@echo "==> 停止现有 wcc daemon..."
-	@pkill -f "node.*dist/main.js.*start" 2>/dev/null || true
-	@sleep 1
-	@echo "==> 启动 wcc daemon..."
-	cd $(WCC_DIR) && nohup node dist/main.js start > /dev/null 2>&1 &
-	@sleep 2
-	@echo "==> wcc 已启动"
+	cd $(WCC_DIR) && npm run daemon -- restart
 
-restart: install restart-gateway restart-wcc ## 一键全部：构建+安装+重启 gateway+重启 wcc
-	@echo ""
-	@echo "==> 全部完成"
-	@echo "  gateway: $$(curl -sf http://localhost:3847/health 2>/dev/null || echo '未响应')"
-	@echo "  wcc: PID $$(pgrep -f 'node.*dist/main.js.*start' | head -1 || echo '未运行')"
-	@echo ""
+restart: restart-gateway restart-wcc ## 重启 gateway + wcc
 
 # ── 验证 ──────────────────────────────────────────────
 
@@ -67,8 +63,9 @@ verify: ## 验证安装状态
 	@test -f $(WCC_DIR)/dist/main.js && echo "  wcc: 文件完整" || echo "  wcc: 缺少构建文件"
 	@test -d ~/.openclaw/extensions/openclaw-bridge && echo "  bridge: 已安装到 extensions" || echo "  bridge: 未安装"
 	@command -v openclaw >/dev/null 2>&1 && openclaw plugins list 2>/dev/null | grep -q "openclaw-bridge" && echo "  bridge: 已加载" || echo "  bridge: 未加载"
+	@test -d $(WCC_SKILL) && echo "  wcc: 已安装到 skills" || echo "  wcc: 未安装到 skills"
 	@curl -sf http://localhost:3847/health >/dev/null 2>&1 && echo "  gateway: 运行中" || echo "  gateway: 未运行"
-	@curl -sf http://localhost:3848/push >/dev/null 2>&1 || echo "  push-server: 运行中 (POST only)" 2>/dev/null; true
+	@cd $(WCC_DIR) && npm run daemon -- status 2>/dev/null || echo "  wcc: 未运行"
 	@echo ""
 
 # ── 清理 ──────────────────────────────────────────────

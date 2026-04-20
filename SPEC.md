@@ -189,14 +189,14 @@ api.on("agent_end", (event, ctx) => {
 - [x] WebUI 发送消息，AI 回复同步推送到微信
 - [x] 推送失败不影响原始通道的回复
 
-### P1（应该）— 待实现
+### P1（应该）— 已完成 ✅
 
-- [ ] **@wechat 标注过滤**：仅非微信渠道 + 含 `@wechat` 才推送；微信来源不推送
-- [ ] **联系人持久化**：wcc 持久化最近微信联系人，bridge/wcc 重启后仍可推送
-- [ ] **/whoami 指令**：显示当前路由指向 claude 还是 openclaw
-- [ ] **长回复自动分段**：复用 wcc 现有的 splitMessage 逻辑
-- [ ] **contextToken 兜底**：push-server 无 token 时使用持久化的最近 token
-- [ ] **push-server 健康检查**：bridge 启动时检测 3848 是否可达
+- [x] **@wechat 标注过滤**：仅非微信渠道 + 含 `@wechat` 才推送；微信来源不推送
+- [x] **联系人持久化**：wcc 持久化最近微信联系人，bridge/wcc 重启后仍可推送
+- [x] **/whoami 指令**：显示当前路由指向 claude 还是 openclaw
+- [x] **长回复自动分段**：复用 wcc 现有的 splitMessage 逻辑
+- [x] **contextToken 兜底**：push-server 无 token 时使用持久化的最近 token
+- [x] **推送失败容错**：推送失败只记日志，不影响原始通道回复
 
 ### P2（可以延后）
 
@@ -233,3 +233,21 @@ api.on("agent_end", (event, ctx) => {
 |------|------|--------|---------|
 | wechat-claude-code | TypeScript | Node.js ≥ 18 | 现有依赖（无新增） |
 | openclaw-bridge | TypeScript | OpenClaw gateway | openclaw/plugin-sdk, Node http |
+
+## 已知局限性
+
+### 安全
+
+- **HTTP 端口无认证**：3847/3848 仅限 localhost 访问（已校验 remoteAddress），但无 token/API key 认证。同机其他进程可调用这些端口。当前为单用户开发场景，可接受。
+- **联系人明文存储**：`contact.json` 以明文保存 userId 和 contextToken。需确保 `DATA_DIR` 权限正确（`chmod 700`）。
+
+### 隐私
+
+- **日志不含消息内容**：已移除消息文本和回复内容的日志记录，仅记录长度。
+- **userId 记入日志**：微信 userId 出现在日志中（用于调试）。生产环境应考虑脱敏。
+
+### 架构
+
+- **单用户模式**：联系人状态为内存单例，多用户同时使用时 @wechat 推送可能发给错误的人。
+- **推送无重试**：push-server 不可用时推送直接丢弃，无重试队列。
+- **sessionsWithHttpReply 无清理**：bridge 进程长期运行时，异常 session 的标记不会自动清理。

@@ -39,7 +39,7 @@ export class BridgeClient {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      logger.info(`bridge: sending message from=${msg.from} text="${msg.text.slice(0, 60)}${msg.text.length > 60 ? '...' : ''}"`);
+      logger.info(`bridge: sending message from=${msg.from} length=${msg.text.length}`);
       const res = await fetch(`${this.baseUrl}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

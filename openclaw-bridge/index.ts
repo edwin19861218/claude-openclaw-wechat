@@ -105,7 +105,7 @@ export default {
       const pushContact = contact ?? getLastWechatContact();
       if (!pushContact) return;
 
-      console.log(`[wechat-notify] forwarding to wechat userId=${pushContact.originalId} text="${replyText.slice(0, 100)}..."`);
+      console.log(`[wechat-notify] forwarding to wechat userId=${pushContact.originalId} length=${replyText.length}`);
 
       fetch("http://localhost:3848/push", {
         method: "POST",
