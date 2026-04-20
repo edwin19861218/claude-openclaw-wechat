@@ -19,6 +19,8 @@ import { logger } from './logger.js';
 import { DATA_DIR } from './constants.js';
 import { MessageType, type WeixinMessage } from './wechat/types.js';
 import { BridgeClient } from './openclaw/bridge-client.js';
+import { startPushServer } from './openclaw/push-server.js';
+import { saveContact } from './openclaw/contact-store.js';
 import type { RoutingMode } from './session.js';
 
 // ---------------------------------------------------------------------------
@@ -222,6 +224,13 @@ async function runDaemon(): Promise<void> {
   logger.info('Daemon started', { accountId: account.accountId });
   console.log(`已启动 (账号: ${account.accountId})`);
 
+  // Start push server for bridge @wechat forwarding
+  await startPushServer({
+    sendText: sender.sendText.bind(sender),
+    getLastContextToken: () => sharedCtx.lastContextToken,
+  }, 3848);
+  console.log('Push server listening on 127.0.0.1:3848');
+
   await monitor.run();
 }
 
@@ -247,6 +256,9 @@ async function handleMessage(
   const contextToken = msg.context_token ?? '';
   const fromUserId = msg.from_user_id;
   sharedCtx.lastContextToken = contextToken;
+
+  // Persist contact for @wechat push forwarding
+  saveContact(fromUserId, contextToken);
 
   // Extract text from items
   const userText = extractTextFromItems(msg.item_list);

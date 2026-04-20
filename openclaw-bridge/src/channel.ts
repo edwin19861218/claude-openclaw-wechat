@@ -4,6 +4,7 @@ import type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { startHttpServer, stopHttpServer } from "./http-server.js";
 import type { BridgeMessage, BridgeResponse, ResolvedBridgeAccount } from "./types.js";
 import { createLogger } from "./logger.js";
+import { setLastWechatContact, markSessionHttpReply } from "./wechat-notify.js";
 
 const logger = createLogger("bridge:channel");
 
@@ -138,6 +139,13 @@ async function handleMessage(
   try {
     const from = msg.from;
 
+    // Track original userId for @wechat forwarding
+    setLastWechatContact({
+      canonicalId: from.toLowerCase(),
+      originalId: from,
+      contextToken: msg.contextToken,
+    });
+
     const ctx: Record<string, unknown> = {
       Body: msg.text,
       From: from,
@@ -165,6 +173,9 @@ async function handleMessage(
     }
 
     ctx.SessionKey = route.sessionKey;
+
+    // Mark that reply will go via HTTP — no push to WeChat needed
+    if (route.sessionKey) markSessionHttpReply(route.sessionKey);
 
     const storePath = channelRuntime.session.resolveStorePath(cfg.session?.store, {
       agentId: route.agentId,

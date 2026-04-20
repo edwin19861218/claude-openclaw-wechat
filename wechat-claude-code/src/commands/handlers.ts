@@ -21,6 +21,7 @@ const HELP_TEXT = `可用命令：
   /switch           查看当前路由模式
   /switch claude    切换到 Claude Code（默认）
   /switch openclaw  切换到 OpenClaw（需启动 bridge）
+  /whoami           查看当前路由指向
 
 配置：
   /cwd [路径]       查看或切换工作目录
@@ -242,6 +243,23 @@ export function handleUndo(ctx: CommandContext, args: string): CommandResult {
 }
 
 /** 查看版本信息 */
+export async function handleWhoami(ctx: CommandContext): Promise<CommandResult> {
+  const mode = ctx.session.routingMode ?? 'claude';
+  const label = mode === 'claude' ? 'Claude Code' : 'OpenClaw';
+
+  // Check current target availability
+  let status = '';
+  if (mode === 'openclaw') {
+    const health = await bridgeHealthCheck();
+    status = health.ok ? '✅ 可用' : '❌ 不可用';
+  } else {
+    // claude mode — assume available (no separate health check)
+    status = '✅ 可用';
+  }
+
+  return { reply: `当前路由: ${label}\n目标状态: ${status}`, handled: true };
+}
+
 export function handleVersion(): CommandResult {
   try {
     const __dirname = fileURLToPath(new URL('.', import.meta.url));

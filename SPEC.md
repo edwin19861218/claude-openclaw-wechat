@@ -1,314 +1,235 @@
-# SPEC: 微信统一入口 — /switch 指令路由
+# SPEC: 微信统一入口 — /switch 路由 + 跨通道 @wechat 推送
 
 ## 目标
 
-将 wechat-claude-code 改造为微信消息的**唯一监听入口**，通过 `/switch` 指令在 Claude Code 和 OpenClaw 之间切换消息路由。新建 openclaw-bridge 插件作为 OpenClaw gateway 的消息接收通道。
+1. 将 wechat-claude-code 改造为微信消息的**唯一监听入口**，通过 `/switch` 指令在 Claude Code 和 OpenClaw 之间切换消息路由。
+2. 新建 openclaw-bridge 插件作为 OpenClaw gateway 的消息接收通道。
+3. 实现 **@wechat 跨通道推送**：从非微信渠道（WebUI、定时任务等）发送的消息，当包含 `@wechat` 标注时，AI 回复自动同步推送到微信。
 
 ## 背景与问题
 
-当前 `openclaw-weixin` 和 `wechat-claude-code` 各自独立监听同一个微信账号的消息（通过 `getUpdates` 长轮询），两者互斥无法同时运行。用户希望用一个微信账号同时使用两个系统。
+### /switch 路由
+
+`openclaw-weixin` 和 `wechat-claude-code` 各自独立监听同一个微信账号的消息（通过 `getUpdates` 长轮询），两者互斥无法同时运行。用户希望用一个微信账号同时使用两个系统。
+
+### @wechat 推送
+
+当前 bridge 仅处理 wcc 主动 POST 的消息（请求-响应模式）。WebUI、定时任务、其他 channel 触发的消息完全绕过 bridge，回复不会推送到微信。用户希望从非微信渠道标注 `@wechat`，AI 回复就能同步到微信。
+
+**关键约束：** 微信来源的消息已有正常的回复通道（bridge HTTP 响应 → wcc → 微信），不需要额外推送。只有**其他渠道**（webchat、cron 等）的消息带 `@wechat` 时才触发推送。
 
 ## 架构
+
+### 消息路由（/switch）
 
 ```
 微信消息 → wechat-claude-code（唯一监听者）
                 │
                 ├── /switch claude  → Claude Agent SDK（现有逻辑）
                 │
-                └── /switch openclaw → HTTP POST localhost:port
+                └── /switch openclaw → HTTP POST localhost:3847
                                             → openclaw-bridge channel
-                                                → OpenClaw gateway
-                                                    → AI Agent 处理
-                                                        → channel.sendMessage()
-                                                            → HTTP 回传
-                                                                → wechat-claude-code 发回微信
+                                                → OpenClaw gateway → AI Agent
+                                                    → HTTP 回传 → wcc 发回微信
 ```
 
-### 组件职责
+### 跨通道推送（@wechat）
 
-| 组件 | 职责 | 类型 |
+```
+WebUI/定时任务/其他 channel 发送含 "@wechat" 的消息
+       │
+       ▼
+  ① message_received hook 触发（bridge 注册）
+     channelId ≠ "openclaw-bridge" 且 content 含 "@wechat"
+     → 标记 wechatPushRequested = true
+       │
+       ▼
+  ② OpenClaw gateway 正常处理（AI agent 生成回复）
+       │
+       ▼
+  ③ agent_end hook 触发（bridge 注册）
+     wechatPushRequested == true
+     → 提取 AI 回复文本
+     → POST 到 wcc push-server (localhost:3848)
+     → 重置 wechatPushRequested = false
+       │
+       ▼
+  ④ wcc 收到推送 → sender.sendText() 发到微信
+```
+
+**消息来源区分：**
+- `channelId == "openclaw-bridge"` → 来自微信，已有回复通道，**不推送**
+- `channelId != "openclaw-bridge"`（webchat、cron 等）→ 来自其他渠道，**检测 @wechat 后推送**
+
+## 已验证的技术前提（Phase 0）
+
+| 验证项 | 结果 | 关键发现 |
+|--------|------|----------|
+| `api.on("message_received")` 跨通道可用 | ✅ 通过 | 捕获 webchat 消息，channelId=webchat |
+| `api.on("agent_end")` 跨通道可用 | ✅ 通过 | 捕获 AI 回复，含完整 messages 数组和 sessionKey |
+| `message_sending` hook 对 webchat 无效 | ⚠️ 限制 | webchat 是内部通道，不走 delivery 管道，不触发此 hook |
+| sessionKey 含微信联系人 ID | ✅ 通过 | 格式：`agent:sevenger:openclaw-bridge:direct:<userId>` |
+| OpenClaw 标准化 userId 为小写 | ⚠️ 注意 | sessionKey 中 userId 被转为小写，需从 wcc 原始消息获取正确大小写 |
+| contextToken 可从 wcc 消息流获取 | ✅ 通过 | wcc POST /message 时携带 contextToken，bridge 记录 |
+
+## 组件职责
+
+| 组件 | 改动 | 说明 |
 |------|------|------|
-| wechat-claude-code | 微信消息监听、/switch 路由、Claude Code 对话、消息发回微信 | 改造现有 |
-| openclaw-bridge | OpenClaw channel 插件，暴露本地 HTTP API，转发消息给 gateway | 新建 |
+| wechat-claude-code `/switch` | 已实现 | 微信消息路由切换 |
+| wechat-claude-code `/whoami` | 待实现 | 显示当前路由指向 claude 还是 openclaw |
+| wechat-claude-code `bridge-client.ts` | 已实现 | HTTP 客户端，转发消息给 bridge |
+| wechat-claude-code `push-server.ts` | 已实现 | HTTP 端点 (3848)，接收 bridge 转发的回复并调 sender 发微信 |
+| wechat-claude-code 联系人持久化 | 待实现 | 持久化最近微信联系人到磁盘，避免重启后丢失 |
+| openclaw-bridge `index.ts` hook | 已实现 | `agent_end` hook 提取回复，POST 到 wcc push-server |
+| openclaw-bridge `channel.ts` | 已实现 | 记录 wcc 原始 userId（含大小写）和 contextToken |
+| openclaw-bridge `wechat-notify.ts` | 已实现 | 联系人状态共享模块 |
 
 ## 项目结构
 
 ```
 claude-openclaw-wechat/
-├── wechat-claude-code/          # 改造
+├── wechat-claude-code/
 │   └── src/
 │       ├── commands/
-│       │   ├── router.ts         # 添加 /switch 路由
-│       │   └── handlers.ts       # 添加 switchHandler
+│       │   ├── router.ts           # /switch + /whoami 路由
+│       │   └── handlers.ts         # switchHandler + whoamiHandler
 │       ├── openclaw/
-│       │   ├── bridge-client.ts  # HTTP 客户端，转发消息给 bridge
-│       │   └── health.ts         # OpenClaw gateway 健康检查
-│       ├── session.ts            # 添加 routingMode 字段
-│       └── store.ts              # 持久化 routingMode
+│       │   ├── bridge-client.ts    # HTTP 客户端 → bridge
+│       │   ├── push-server.ts      # HTTP 端点 ← bridge 转发
+│       │   ├── contact-store.ts    # 联系人持久化（新增）
+│       │   └── health.ts           # 健康检查
+│       └── main.ts                 # 启动 push-server + daemon
 │
-├── openclaw-bridge/              # 新建
-│   ├── index.ts                  # 插件注册入口
-│   ├── openclaw.plugin.json      # 插件配置
-│   ├── package.json
-│   ├── tsconfig.json
+├── openclaw-bridge/
+│   ├── index.ts                    # 插件注册 + message_received + agent_end hooks
 │   └── src/
-│       ├── channel.ts            # Channel 插件实现
-│       ├── http-server.ts        # 本地 HTTP 服务器
-│       ├── types.ts              # 消息类型定义
-│       └── logger.ts             # 日志
+│       ├── channel.ts              # Channel 实现 + 记录联系人
+│       ├── wechat-notify.ts        # 联系人状态 + @wechat 标记共享
+│       ├── http-server.ts          # HTTP 服务器
+│       ├── types.ts
+│       └── logger.ts
 │
-└── openclaw-weixin/              # 不动
+└── openclaw-weixin/                # 不动
 ```
 
-## 详细设计
+## 详细设计 — P1 新增
 
-### 1. wechat-claude-code 改造
-
-#### 1.1 /switch 指令
-
-**路由状态：**
-```typescript
-type RoutingMode = 'claude' | 'openclaw';
-
-// 存储在 session 中，持久化到磁盘
-interface Session {
-  // ... 现有字段
-  routingMode: RoutingMode;  // 默认 'claude'
-}
-```
-
-**指令行为：**
-- `/switch` — 显示当前路由目标和状态
-- `/switch claude` — 切换到 Claude Code 模式
-- `/switch openclaw` — 切换到 OpenClaw 模式（自动检测 bridge 可用性）
-
-**切换到 openclaw 时的检查：**
-1. 检查本地 HTTP bridge 是否可达（GET `/health`）
-2. 不可达时提示用户：启动 OpenClaw gateway 或安装 openclaw-bridge
-3. 可达时确认切换并提示当前工作目录
-
-#### 1.2 消息路由逻辑
-
-在 `commands/router.ts` 的消息处理入口添加路由判断：
-
-```
-收到微信消息
-    │
-    ├── 是 /switch 指令？ → switchHandler 处理
-    ├── 是 /help？→ 追加显示 /switch 说明
-    │
-    └── routingMode == 'claude'？
-            ├── 是 → 现有 Claude Code 处理流程（不变）
-            └── 否 → 转发给 openclaw-bridge
-                        │
-                        ├── 文本消息：提取 text_body
-                        ├── 图片消息：下载解密后传 base64 或 URL
-                        └── 等待 bridge 回传响应 → 发回微信
-```
-
-#### 1.3 Bridge Client
+### 1. @wechat 标注过滤（bridge 侧）
 
 ```typescript
-// src/openclaw/bridge-client.ts
+// wechat-notify.ts — 共享状态
+let wechatPushRequested = false;
+let lastContact: { originalId: string; contextToken?: string } | null = null;
 
-interface BridgeClientConfig {
-  baseUrl: string;  // 默认 http://localhost:3847
-  timeoutMs: number; // 默认 120000
+export function markWechatPush(contact: { originalId: string; contextToken?: string }): void {
+  wechatPushRequested = true;
+  lastContact = contact;
 }
 
-interface BridgeMessage {
-  from: string;          // 微信发送者 ID
-  text: string;          // 消息文本
-  media?: {              // 可选媒体
-    type: 'image' | 'voice' | 'file';
-    data: string;        // base64 或下载 URL
-    mimeType?: string;
-    fileName?: string;
-  };
-  timestamp: number;
-  contextToken?: string; // 微信 context_token（用于回传）
-  metadata?: Record<string, string>; // 扩展字段
-}
-
-interface BridgeResponse {
-  ok: boolean;
-  reply?: {
-    text: string;
-    media?: { url: string; type: string }[];
-  };
-  error?: string;
+export function consumeWechatPush(): { originalId: string; contextToken?: string } | null {
+  if (!wechatPushRequested || !lastContact) return null;
+  wechatPushRequested = false;
+  return lastContact;
 }
 ```
-
-**关键方法：**
-- `send(message): Promise<BridgeResponse>` — POST `/message`
-- `healthCheck(): Promise<{ ok: boolean; gatewayStatus: string }>` — GET `/health`
-
-#### 1.4 OpenClaw 模式下的响应回传
-
-wechat-claude-code 等待 bridge 的 HTTP 响应（同步模式）或轮询结果（异步模式，如果 OpenClaw agent 处理时间较长）。
-
-**响应模式选择：**
-- 同步模式（推荐初始实现）：bridge 等 agent 处理完再返回 HTTP 响应
-- 超时处理：如果 agent 处理超过 60s，bridge 先返回一个"处理中"状态，后续通过回调推送
-
-### 2. openclaw-bridge 新建
-
-#### 2.1 插件注册
-
-```json
-// openclaw.plugin.json
-{
-  "id": "openclaw-bridge",
-  "version": "1.0.0",
-  "channels": ["openclaw-bridge"],
-  "configSchema": {
-    "type": "object",
-    "properties": {
-      "port": {
-        "type": "number",
-        "default": 3847,
-        "description": "本地 HTTP 监听端口"
-      }
-    }
-  }
-}
-```
-
-#### 2.2 Channel 实现
 
 ```typescript
-// src/channel.ts
+// index.ts — hooks
+api.on("message_received", (event, ctx) => {
+  // 只处理非微信渠道 + 含 @wechat 的消息
+  if (ctx.channelId === "openclaw-bridge") return;
+  const content = (event as any).content ?? "";
+  if (!content.includes("@wechat")) return;
 
-export const bridgeChannel: ChannelPlugin = {
-  register(api) {
-    return {
-      auth: { /* 简化认证，仅本地访问 */ },
-      gateway: {
-        startAccount(ctx) {
-          // 启动本地 HTTP 服务器
-          // 收到 HTTP 请求后调用 channelRuntime.onMessage()
-        },
-        stopAccount(ctx) {
-          // 关闭 HTTP 服务器
-        },
-      },
-      outbound: {
-        async sendText(ctx) {
-          // gateway 回复文本 → 返回给 HTTP 调用方
-        },
-        async sendMedia(ctx) {
-          // gateway 回复媒体 → 返回给 HTTP 调用方
-        },
-      },
-    };
-  },
-};
+  const contact = getLastWechatContact();
+  if (!contact) return;
+
+  markWechatPush(contact);
+  console.log(`[wechat-notify] @wechat detected from ${ctx.channelId}, will push to ${contact.originalId}`);
+});
+
+api.on("agent_end", (event, ctx) => {
+  const contact = consumeWechatPush();
+  if (!contact) return;
+
+  const replyText = extractReplyText((event as any).messages);
+  if (!replyText) return;
+
+  fetch("http://localhost:3848/push", { ... });
+});
 ```
 
-#### 2.3 HTTP API
+### 2. 联系人持久化（wcc 侧）
 
-```
-POST /message
-  Body: BridgeMessage (JSON)
-  Response: BridgeResponse (JSON)
-  超时: 120s
+```typescript
+// src/openclaw/contact-store.ts
+// 持久化到 DATA_DIR/contact.json
+// { originalId: string, contextToken?: string, updatedAt: number }
 
-GET /health
-  Response: { ok: boolean, gateway: "running" | "stopped", version: string }
-```
-
-#### 2.4 安全考虑
-
-- 仅监听 localhost（127.0.0.1）
-- 可选：简单 token 认证（通过 plugin config 设置）
-- 不暴露到外网
-
-### 3. 消息流程详解
-
-#### Claude Code 模式（现有，不变）
-```
-用户微信发消息 → wcc 监听 → 路由到 Claude → 流式响应 → 发回微信
+// wcc 每次收到微信消息时调用 save()
+// push-server 收到推送且包含联系人时也调用 save()
+// push-server 启动时调用 load() 作为兜底
 ```
 
-#### OpenClaw 模式（新增）
+### 3. /whoami 指令（wcc 侧）
+
 ```
-1. 用户微信发消息 "帮我写个 Python 脚本"
-2. wcc 监听到消息，routingMode == 'openclaw'
-3. wcc 构建 BridgeMessage:
-   { from: "wxid_xxx", text: "帮我写个 Python 脚本", timestamp: ..., contextToken: "..." }
-4. wcc POST → http://localhost:3847/message
-5. openclaw-bridge 收到请求
-6. bridge 调用 channelRuntime.onMessage({ from, text, ... })
-7. OpenClaw gateway 接收消息，交给 AI agent 处理
-8. agent 处理完成，gateway 调用 channel.outbound.sendText({ text: "这是脚本..." })
-9. bridge 拦截 sendText 回调，将文本写入 HTTP 响应
-10. bridge 返回 HTTP 响应: { ok: true, reply: { text: "这是脚本..." } }
-11. wcc 收到响应，通过 sendMessage 发回微信
+/whoami → 回复当前路由模式：
+  "当前路由: Claude Code" 或 "当前路由: OpenClaw"
+  同时显示 push-server 状态
 ```
 
 ## 验收标准
 
-### 必须实现（P0）
-- [ ] `/switch` 指令可在 claude 和 openclaw 之间切换
-- [ ] 切换到 openclaw 时自动检测 bridge 可用性
-- [ ] openclaw 模式下文本消息正确路由到 OpenClaw gateway 并收到回复
-- [ ] openclaw 模式下的回复正确发回微信
-- [ ] bridge 不可用时给出明确错误提示，不影响 claude 模式使用
-- [ ] routing 状态持久化，重启后恢复
+### P0（必须）— 已完成 ✅
 
-### 应该实现（P1）
-- [ ] openclaw 模式支持图片消息转发
-- [ ] bridge 健康检查（/health 端点）
-- [ ] `/status` 指令显示当前路由状态
-- [ ] 日志记录路由切换事件
+- [x] `/switch` 指令可在 claude 和 openclaw 之间切换
+- [x] openclaw 模式下文本消息正确路由到 OpenClaw gateway 并收到回复
+- [x] WebUI 发送消息，AI 回复同步推送到微信
+- [x] 推送失败不影响原始通道的回复
 
-### 可以延后（P2）
-- [ ] openclaw 模式支持语音/文件消息
-- [ ] 长时间 agent 响应的异步处理
-- [ ] 多微信账号的路由隔离
+### P1（应该）— 待实现
+
+- [ ] **@wechat 标注过滤**：仅非微信渠道 + 含 `@wechat` 才推送；微信来源不推送
+- [ ] **联系人持久化**：wcc 持久化最近微信联系人，bridge/wcc 重启后仍可推送
+- [ ] **/whoami 指令**：显示当前路由指向 claude 还是 openclaw
+- [ ] **长回复自动分段**：复用 wcc 现有的 splitMessage 逻辑
+- [ ] **contextToken 兜底**：push-server 无 token 时使用持久化的最近 token
+- [ ] **push-server 健康检查**：bridge 启动时检测 3848 是否可达
+
+### P2（可以延后）
+
+- [ ] `@wechat:wxid_xxx` 指定推送目标
+- [ ] 推送状态反馈（bridge 回复原始通道"已推送到微信"）
+- [ ] 多微信账号支持
+- [ ] 图片/媒体消息转发
 
 ## 边界
 
 ### 始终做
 - 保持 wechat-claude-code 的现有 Claude Code 功能完全不受影响
 - 所有微信消息收发只通过 wechat-claude-code
-- openclaw-bridge 仅监听 localhost
-- 切换失败时回退到 claude 模式
+- openclaw-bridge 仅监听 localhost（3847 + 3848）
+- 推送失败只记日志，不影响原始通道回复
+- 联系人信息从 wcc 的正常消息流中自动获取
+- 微信来源消息的回复走现有 bridge HTTP 响应通道，不走 push
 
 ### 先问再做
-- openclaw-bridge 的端口号（默认 3847）
-- 是否需要 bridge 认证 token
-- agent 长时间响应的处理策略
+- `@wechat` 的精确匹配规则（子串 vs 独立词）
+- contextToken 过期时的重试策略
+- 是否需要推送确认消息回原始通道
 
 ### 永远不做
 - 修改 openclaw-weixin 的代码
-- 让 wechat-claude-code 依赖 openclaw plugin-sdk
-- 暴露 bridge HTTP 端点到外网
-- 破坏现有 wechat-claude-code 命令的兼容性
+- 修改 OpenClaw gateway 核心代码
+- 让 wcc 依赖 openclaw plugin-sdk
+- 暴露任何端口到外网
+- 阻塞原始通道的消息回复流程
 
 ## 技术栈
 
 | 组件 | 语言 | 运行时 | 关键依赖 |
 |------|------|--------|---------|
 | wechat-claude-code | TypeScript | Node.js ≥ 18 | 现有依赖（无新增） |
-| openclaw-bridge | TypeScript | OpenClaw gateway | openclaw/plugin-sdk, Node http 模块 |
-
-## 测试策略
-
-### 单元测试
-- `/switch` 指令解析和状态管理
-- BridgeClient 的 HTTP 请求构建
-- 路由决策逻辑（routingMode 判断）
-
-### 集成测试
-- wechat-claude-code ↔ openclaw-bridge HTTP 通信
-- openclaw-bridge ↔ OpenClaw gateway channel 接口
-- 端到端：微信消息 → 路由 → OpenClaw → 响应 → 微信
-
-### 手动验证
-- 启动 OpenClaw gateway + openclaw-bridge
-- 启动 wechat-claude-code
-- 微信中发送 `/switch openclaw`，确认切换成功
-- 发送文本消息，确认 OpenClaw 回复正确
-- 发送 `/switch claude`，确认切回并正常对话
+| openclaw-bridge | TypeScript | OpenClaw gateway | openclaw/plugin-sdk, Node http |
