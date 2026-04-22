@@ -156,6 +156,9 @@ npm run daemon -- logs      # 查看日志
 | `/clear` | 清除当前会话 |
 | `/reset` | 完全重置 |
 | `/status` | 查看会话状态 |
+| `/session` | 列出当前目录的 Claude 会话 |
+| `/session new` | 新建会话（开始全新对话） |
+| `/session select <n>` | 切换到第 n 个历史会话 |
 | `/compact` | 压缩上下文（新 SDK 会话，保留历史） |
 | `/history [数量]` | 查看对话记录 |
 | `/undo [数量]` | 撤销最近对话 |
@@ -164,7 +167,7 @@ npm run daemon -- logs      # 查看日志
 
 | 指令 | 说明 |
 |------|------|
-| `/cwd [路径]` | 查看或切换工作目录 |
+| `/cwd [路径]` | 查看或切换工作目录（`-c` 自动创建） |
 | `/model [名称]` | 切换 Claude 模型 |
 | `/permission [模式]` | 切换权限模式 |
 | `/prompt [内容]` | 设置系统提示词 |
@@ -172,6 +175,25 @@ npm run daemon -- logs      # 查看日志
 | `/version` | 查看版本 |
 
 ### @wechat 跨渠道推送（新增）
+
+### 支持的消息类型
+
+| 类型 | 说明 |
+|------|------|
+| 文字 | 直接对话 |
+| 图片 | Claude 自动分析图片内容 |
+| 语音 | 提取微信服务器转写的文字处理（无需下载音频） |
+
+## 多会话管理
+
+同一工作目录下的 Claude 会话会被自动管理和复用：
+
+- `/cwd <路径>` 切换目录时，自动恢复该目录最近使用的会话
+- `/session` 列出当前目录的所有历史会话
+- `/session new` 创建全新会话
+- `/session select <n>` 切换到指定历史会话
+
+底层直接扫描 `~/.claude/projects/{dir-hash}/` 的 session 文件，无需自建索引。
 
 在 WebUI、Cron 等非微信渠道发送消息时添加 `@wechat`，AI 回复自动推送到微信：
 

@@ -12,9 +12,11 @@
 
 - **文字对话** — 直接发送文字与 Claude Code 交互
 - **图片理解** — 发送图片，Claude 自动分析
+- **语音消息** — 提取微信服务器转写的文字（voice_text），作为文本对话处理
 - **流式回复** — 回复实时逐段推送，长消息自动分段（2048 字符）
 - **实时进度** — 查看工具调用（🔧 Bash、📖 Read、🔍 Glob…）和思考预览
 - **多轮会话** — 上下文连续，支持 `/compact` 压缩
+- **多会话管理** — `/session` 管理 Claude 会话，`/cwd` 切换目录自动恢复会话
 - **Skill 触发** — `/<skill名>` 调用已安装的 Claude Code skill
 - **中断支持** — 处理中发新消息可打断当前任务
 - **跨平台守护** — macOS launchd / Linux systemd 自动重启
@@ -82,10 +84,13 @@ WebUI/Cron → OpenClaw → @wechat hook → POST :3848/push → wcc → 微信
 | `/clear` | 清除当前会话 |
 | `/reset` | 完全重置（包括工作目录） |
 | `/status` | 查看会话状态 |
+| `/session` | 列出当前目录的 Claude 会话 |
+| `/session new` | 新建会话（开始全新对话） |
+| `/session select <n>` | 切换到第 n 个历史会话 |
 | `/compact` | 压缩上下文（新 SDK 会话，保留历史） |
 | `/history [数量]` | 查看对话记录（默认 20 条） |
 | `/undo [数量]` | 撤销最近对话 |
-| `/cwd [路径]` | 查看或切换工作目录 |
+| `/cwd [路径]` | 查看或切换工作目录（`-c` 自动创建） |
 | `/model [名称]` | 切换 Claude 模型 |
 | `/permission [模式]` | 切换权限模式 |
 | `/prompt [内容]` | 设置系统提示词 |
@@ -111,13 +116,14 @@ wechat-claude-code/src/
 │   ├── contact-store.ts # 联系人持久化
 │   └── health.ts        # Bridge 健康检查
 ├── claude/              # Claude Agent SDK 集成
-│   ├── provider.ts      # SDK 封装
+│   ├── provider.ts      # SDK 封装（支持 resume/continue）
+│   ├── session-scanner.ts # 扫描 ~/.claude/projects/ 获取会话列表
 │   └── skill-scanner.ts # Skill 扫描
 ├── wechat/              # 微信 API 封装
 │   ├── api.ts           # HTTP 客户端
 │   ├── monitor.ts       # 消息轮询
 │   ├── send.ts          # 消息发送
-│   ├── media.ts         # 图片下载
+│   ├── media.ts         # 图片下载 + 语音文字提取
 │   └── login.ts         # QR 扫码绑定
 ├── session.ts           # 会话状态
 ├── permission.ts        # 权限审批代理

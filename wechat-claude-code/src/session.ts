@@ -32,6 +32,8 @@ export interface Session {
   chatHistory: ChatMessage[];
   maxHistoryLength?: number;
   routingMode?: RoutingMode;
+  /** When true, next query uses SDK `continue` to auto-resume last session for cwd */
+  useContinue?: boolean;
 }
 
 export interface PendingPermission {

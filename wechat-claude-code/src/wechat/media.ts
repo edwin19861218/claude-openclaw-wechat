@@ -85,3 +85,12 @@ export function extractText(item: MessageItem): string {
 export function extractFirstImageUrl(items?: MessageItem[]): MessageItem | undefined {
   return items?.find((item) => item.type === MessageItemType.IMAGE);
 }
+
+/**
+ * Extract transcribed text from the first VOICE type item.
+ * Returns empty string if no voice item or voice_text is absent.
+ */
+export function extractVoiceText(items?: MessageItem[]): string {
+  const voiceItem = items?.find((item) => item.type === MessageItemType.VOICE);
+  return voiceItem?.voice_item?.voice_text ?? '';
+}

@@ -2,7 +2,9 @@ import type { CommandContext, CommandResult } from './router.js';
 import { scanAllSkills, formatSkillList, findSkill, type SkillInfo } from '../claude/skill-scanner.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { bridgeHealthCheck } from '../openclaw/health.js';
-import { readFileSync } from 'node:fs';
+import { listSessions, formatSessionList, findLatestSessionId } from '../claude/session-scanner.js';
+import { existsSync, mkdirSync, statSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,6 +15,9 @@ const HELP_TEXT = `可用命令：
   /clear            清除当前会话
   /reset            完全重置（包括工作目录等设置）
   /status           查看当前会话状态
+  /session          查看当前目录的会话列表
+  /session new      新建会话（开始新对话）
+  /session select <n> 切换到第n个会话
   /compact          压缩上下文（开始新 SDK 会话，保留历史）
   /history [数量]   查看对话记录（默认最近20条）
   /undo [数量]      撤销最近对话（默认1条）
@@ -24,7 +29,7 @@ const HELP_TEXT = `可用命令：
   /whoami           查看当前路由指向
 
 配置：
-  /cwd [路径]       查看或切换工作目录
+  /cwd [路径]       查看或切换工作目录（-c 自动创建）
   /model [名称]     查看或切换 Claude 模型
   /permission [模式] 查看或切换权限模式
   /prompt [内容]    查看或设置系统提示词（全局生效）
@@ -104,10 +109,39 @@ export function handleClear(ctx: CommandContext): CommandResult {
 
 export function handleCwd(ctx: CommandContext, args: string): CommandResult {
   if (!args) {
-    return { reply: `当前工作目录: ${ctx.session.workingDirectory}\n用法: /cwd <路径>`, handled: true };
+    return { reply: `当前工作目录: ${ctx.session.workingDirectory}\n用法: /cwd <路径>  或  /cwd -c <路径>（自动创建）`, handled: true };
   }
-  ctx.updateSession({ workingDirectory: args });
-  return { reply: `✅ 工作目录已切换为: ${args}`, handled: true };
+
+  const createIfMissing = args.startsWith('-c ');
+  const rawPath = createIfMissing ? args.slice(3).trim() : args.trim();
+
+  const expanded = rawPath.replace(/^~/, process.env.HOME || '~');
+  const absolute = resolve(ctx.session.workingDirectory, expanded);
+
+  if (existsSync(absolute)) {
+    if (!statSync(absolute).isDirectory()) {
+      return { reply: `❌ 不是目录: ${absolute}`, handled: true };
+    }
+    const changedDir = absolute !== ctx.session.workingDirectory;
+    ctx.updateSession({ workingDirectory: absolute });
+    if (changedDir) {
+      // Auto-resume latest session for the new directory
+      const latestId = findLatestSessionId(absolute);
+      if (latestId) {
+        ctx.updateSession({ sdkSessionId: latestId });
+        return { reply: `✅ 工作目录已切换为: ${absolute}\n📎 已恢复最近会话: ${latestId.slice(0, 8)}`, handled: true };
+      }
+    }
+    return { reply: `✅ 工作目录已切换为: ${absolute}`, handled: true };
+  }
+
+  if (!createIfMissing) {
+    return { reply: `❌ 目录不存在: ${absolute}\n使用 /cwd -c <路径> 可自动创建`, handled: true };
+  }
+
+  mkdirSync(absolute, { recursive: true });
+  ctx.updateSession({ workingDirectory: absolute });
+  return { reply: `✅ 已创建并切换到: ${absolute}`, handled: true };
 }
 
 export function handleModel(ctx: CommandContext, args: string): CommandResult {
@@ -116,6 +150,42 @@ export function handleModel(ctx: CommandContext, args: string): CommandResult {
   }
   ctx.updateSession({ model: args });
   return { reply: `✅ 模型已切换为: ${args}`, handled: true };
+}
+
+export function handleSession(ctx: CommandContext, args: string): CommandResult {
+  const cwd = ctx.session.workingDirectory;
+  const sub = args.trim().toLowerCase();
+
+  // /session new — create a fresh session
+  if (sub === 'new') {
+    ctx.updateSession({ sdkSessionId: undefined, useContinue: false, chatHistory: [] });
+    return { reply: '✅ 已创建新会话\n下次发消息将开始全新对话', handled: true };
+  }
+
+  // /session select <n> — switch to a specific session
+  if (sub.startsWith('select') || sub.startsWith('s ')) {
+    const numStr = sub.replace(/^(select|s)\s+/, '');
+    const num = parseInt(numStr, 10);
+    if (isNaN(num) || num < 1) {
+      return { reply: '用法: /session select <编号>\n例: /session select 1', handled: true };
+    }
+    const sessions = listSessions(cwd);
+    if (sessions.length === 0) {
+      return { reply: '当前目录暂无会话记录', handled: true };
+    }
+    if (num > sessions.length) {
+      return { reply: `❌ 编号超出范围，当前共 ${sessions.length} 个会话`, handled: true };
+    }
+    const target = sessions[num - 1];
+    ctx.updateSession({ sdkSessionId: target.sessionId, useContinue: false });
+    return { reply: `✅ 已切换到会话: ${target.shortId}\n文件大小: ${(target.size / 1024).toFixed(0)} KB`, handled: true };
+  }
+
+  // /session or /session list — show session list
+  const sessions = listSessions(cwd);
+  const activeId = ctx.session.sdkSessionId;
+  const reply = formatSessionList(cwd, sessions, activeId);
+  return { reply, handled: true };
 }
 
 const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'auto'] as const;

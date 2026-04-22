@@ -22,6 +22,8 @@ wcc daemon 管理：`cd wechat-claude-code && npm run daemon -- {start|stop|rest
 - 微信消息流向：微信 → wcc → `/switch` 路由 → Claude Code 或 bridge:3847 → OpenClaw
 - 跨渠道推送：非微信渠道带 `@wechat` → bridge hook → POST wcc:3848 → 微信
 - **微信来源消息不推送**：经 bridge HTTP 同步回复的 session 不触发 push
+- **多会话管理**：直接扫描 `~/.claude/projects/{dir-hash}/` 的 session 文件，`/cwd` 切换目录时自动恢复最近会话
+- **语音消息**：通过微信自带的 `voice_text` 字段提取转写文字，无需下载音频
 
 ## 端口
 
@@ -33,10 +35,14 @@ wcc daemon 管理：`cd wechat-claude-code && npm run daemon -- {start|stop|rest
 | 文件 | 职责 |
 |------|------|
 | `wechat-claude-code/src/main.ts` | daemon 入口 + push-server 启动 |
-| `wechat-claude-code/src/commands/router.ts` | /switch + /whoami 路由 |
+| `wechat-claude-code/src/commands/router.ts` | 命令路由（/switch, /session, /cwd 等） |
+| `wechat-claude-code/src/commands/handlers.ts` | 所有命令处理器实现 |
+| `wechat-claude-code/src/claude/session-scanner.ts` | 扫描 ~/.claude/projects/ 获取会话列表 |
+| `wechat-claude-code/src/claude/provider.ts` | Claude Agent SDK 封装（支持 resume/continue） |
 | `wechat-claude-code/src/openclaw/bridge-client.ts` | HTTP → bridge |
 | `wechat-claude-code/src/openclaw/push-server.ts` | HTTP ← bridge 推送 |
 | `wechat-claude-code/src/openclaw/contact-store.ts` | 联系人持久化 |
+| `wechat-claude-code/src/wechat/media.ts` | 图片下载 + 语音文字提取 |
 | `openclaw-bridge/index.ts` | 插件注册 + @wechat hooks |
 | `openclaw-bridge/src/channel.ts` | Channel 实现 + 联系人记录 |
 | `openclaw-bridge/src/wechat-notify.ts` | 推送状态共享 |

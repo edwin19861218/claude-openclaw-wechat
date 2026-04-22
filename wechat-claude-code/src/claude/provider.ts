@@ -21,6 +21,8 @@ export interface QueryOptions {
   prompt: string;
   cwd: string;
   resume?: string;
+  /** Use SDK `continue` to auto-resume the most recent session for cwd */
+  continueSession?: boolean;
   model?: string;
   systemPrompt?: string;
   permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
@@ -157,6 +159,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     prompt,
     cwd,
     resume,
+    continueSession,
     model,
     systemPrompt,
     permissionMode,
@@ -172,6 +175,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     model,
     permissionMode,
     resume: !!resume,
+    continueSession: !!continueSession,
     hasImages: !!images?.length,
   });
 
@@ -199,6 +203,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
 
   if (model) sdkOptions.model = model;
   if (resume) sdkOptions.resume = resume;
+  if (continueSession && !resume) (sdkOptions as any).continue = true;
   if (abortController) sdkOptions.abortController = abortController;
   if (systemPrompt) {
     (sdkOptions as any).systemPrompt = { type: "preset", preset: "claude_code", append: systemPrompt };

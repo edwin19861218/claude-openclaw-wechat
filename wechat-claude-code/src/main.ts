@@ -9,7 +9,7 @@ import { saveAccount, loadLatestAccount, type AccountData } from './wechat/accou
 import { startQrLogin, waitForQrScan } from './wechat/login.js';
 import { createMonitor, type MonitorCallbacks } from './wechat/monitor.js';
 import { createSender } from './wechat/send.js';
-import { downloadImage, extractText, extractFirstImageUrl } from './wechat/media.js';
+import { downloadImage, extractText, extractFirstImageUrl, extractVoiceText } from './wechat/media.js';
 import { createSessionStore, type Session } from './session.js';
 import { createPermissionBroker } from './permission.js';
 import { routeCommand, type CommandContext, type CommandResult } from './commands/router.js';
@@ -262,6 +262,7 @@ async function handleMessage(
 
   // Extract text from items
   const userText = extractTextFromItems(msg.item_list);
+  const voiceText = extractVoiceText(msg.item_list);
   const imageItem = extractFirstImageUrl(msg.item_list);
 
   // Concurrency guard: abort current query when new message arrives
@@ -374,8 +375,8 @@ async function handleMessage(
 
   // -- Normal message -> route based on routingMode --
 
-  if (!userText && !imageItem) {
-    await sender.sendText(fromUserId, contextToken, '暂不支持此类型消息，请发送文字或图片');
+  if (!userText && !voiceText && !imageItem) {
+    await sender.sendText(fromUserId, contextToken, '暂不支持此类型消息，请发送文字、图片或语音');
     return;
   }
 
@@ -383,7 +384,7 @@ async function handleMessage(
 
   if (routingMode === 'openclaw') {
     await sendToOpenClaw(
-      userText,
+      userText || voiceText,
       fromUserId,
       contextToken,
       account,
@@ -395,7 +396,7 @@ async function handleMessage(
   }
 
   await sendToClaude(
-    userText,
+    userText || voiceText,
     imageItem,
     fromUserId,
     contextToken,
@@ -532,7 +533,8 @@ async function sendToClaude(
     const queryOptions: QueryOptions = {
       prompt: userText || '请分析这张图片',
       cwd: (session.workingDirectory || config.workingDirectory).replace(/^~/, process.env.HOME || ''),
-      resume: session.sdkSessionId,
+      resume: session.useContinue ? undefined : session.sdkSessionId,
+      continueSession: !!session.useContinue,
       model: session.model,
       systemPrompt: config.systemPrompt,
       permissionMode: sdkPermissionMode,
@@ -614,6 +616,7 @@ async function sendToClaude(
 
     // Update session with new SDK session ID
     session.sdkSessionId = result.sessionId || undefined;
+    session.useContinue = false;
     session.state = 'idle';
     sessionStore.save(account.accountId, session);
   } catch (err) {
