@@ -13,6 +13,14 @@ export interface SessionInfo {
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 
 /**
+ * Resolve the effective cwd, matching the SDK logic in main.ts:
+ *   (session.workingDirectory || config.workingDirectory).replace(/^~/, $HOME)
+ */
+export function resolveEffectiveCwd(workingDirectory: string): string {
+  return workingDirectory.replace(/^~/, homedir() || '~');
+}
+
+/**
  * Convert an absolute path to Claude's project directory hash.
  * /Volumes/PiCData/Claude/test → -Volumes-PiCData-Claude-test
  */

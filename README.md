@@ -174,6 +174,8 @@ npm run daemon -- logs      # 查看日志
 | `/skills [full]` | 列出已安装 skill |
 | `/version` | 查看版本 |
 
+> `/session`, `/compact`, `/model`, `/permission`, `/prompt` 仅 Claude 模式下可用。openclaw 模式下输入这些命令会被拦截并提示切换。
+
 ### @wechat 跨渠道推送（新增）
 
 ### 支持的消息类型

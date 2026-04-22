@@ -102,6 +102,8 @@ WebUI/Cron → OpenClaw → @wechat hook → POST :3848/push → wcc → 微信
 | `/whoami` | 当前路由 + 目标端可用性 |
 | `/<skill> [参数]` | 触发已安装 skill |
 
+> `/session`, `/model`, `/permission`, `/prompt`, `/compact` 仅 Claude 模式下可用，openclaw 模式下输入会被拦截。
+
 ## 项目结构
 
 ```
@@ -117,7 +119,7 @@ wechat-claude-code/src/
 │   └── health.ts        # Bridge 健康检查
 ├── claude/              # Claude Agent SDK 集成
 │   ├── provider.ts      # SDK 封装（支持 resume/continue）
-│   ├── session-scanner.ts # 扫描 ~/.claude/projects/ 获取会话列表
+│   ├── session-scanner.ts # 扫描 ~/.claude/projects/ 获取会话列表（含 cwd 对齐）
 │   └── skill-scanner.ts # Skill 扫描
 ├── wechat/              # 微信 API 封装
 │   ├── api.ts           # HTTP 客户端

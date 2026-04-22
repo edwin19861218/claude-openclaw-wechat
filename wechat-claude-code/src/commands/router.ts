@@ -1,7 +1,7 @@
 import type { Session } from '../session.js';
 import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
-import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSwitch, handleWhoami, handleSession, handleUnknown } from './handlers.js';
+import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSwitch, handleWhoami, handleSession, handleUnknown, CLAUDE_ONLY_COMMANDS } from './handlers.js';
 
 export interface CommandContext {
   accountId: string;
@@ -31,6 +31,11 @@ export async function routeCommand(ctx: CommandContext): Promise<CommandResult> 
   const args = spaceIdx === -1 ? '' : text.slice(spaceIdx + 1).trim();
 
   logger.info(`Slash command: /${cmd} ${args}`.trimEnd());
+
+  // Guard: Claude-only commands in openclaw mode
+  if ((ctx.session.routingMode ?? 'claude') === 'openclaw' && CLAUDE_ONLY_COMMANDS.has(cmd)) {
+    return { reply: '⚠️ 此命令仅在 Claude 模式下可用\n/switch claude 切换后使用', handled: true };
+  }
 
   switch (cmd) {
     case 'help':

@@ -2,11 +2,14 @@ import type { CommandContext, CommandResult } from './router.js';
 import { scanAllSkills, formatSkillList, findSkill, type SkillInfo } from '../claude/skill-scanner.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { bridgeHealthCheck } from '../openclaw/health.js';
-import { listSessions, formatSessionList, findLatestSessionId } from '../claude/session-scanner.js';
+import { listSessions, formatSessionList, findLatestSessionId, resolveEffectiveCwd } from '../claude/session-scanner.js';
 import { existsSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+/** Commands that only work in Claude mode */
+export const CLAUDE_ONLY_COMMANDS = new Set(['session', 'model', 'permission', 'prompt', 'compact']);
 
 const HELP_TEXT = `可用命令：
 
@@ -15,7 +18,7 @@ const HELP_TEXT = `可用命令：
   /clear            清除当前会话
   /reset            完全重置（包括工作目录等设置）
   /status           查看当前会话状态
-  /session          查看当前目录的会话列表
+  /session          列出当前目录的 Claude 会话
   /session new      新建会话（开始新对话）
   /session select <n> 切换到第n个会话
   /compact          压缩上下文（开始新 SDK 会话，保留历史）
@@ -30,8 +33,8 @@ const HELP_TEXT = `可用命令：
 
 配置：
   /cwd [路径]       查看或切换工作目录（-c 自动创建）
-  /model [名称]     查看或切换 Claude 模型
-  /permission [模式] 查看或切换权限模式
+  /model [名称]     切换 Claude 模型
+  /permission [模式] 切换权限模式
   /prompt [内容]    查看或设置系统提示词（全局生效）
 
 其他：
@@ -39,7 +42,8 @@ const HELP_TEXT = `可用命令：
   /version          查看版本信息
   /<skill> [参数]   触发已安装的 skill
 
-直接输入文字即可与 Claude Code 或 OpenClaw 对话`;
+注: /session, /model, /permission, /prompt, /compact 仅 Claude 模式生效
+直接输入文字、图片或语音即可对话`;
 
 // 缓存 skill 列表，避免每次命令都扫描文件系统
 let cachedSkills: SkillInfo[] | null = null;
@@ -126,7 +130,8 @@ export function handleCwd(ctx: CommandContext, args: string): CommandResult {
     ctx.updateSession({ workingDirectory: absolute });
     if (changedDir) {
       // Auto-resume latest session for the new directory
-      const latestId = findLatestSessionId(absolute);
+      const effectiveCwd = resolveEffectiveCwd(absolute);
+      const latestId = findLatestSessionId(effectiveCwd);
       if (latestId) {
         ctx.updateSession({ sdkSessionId: latestId });
         return { reply: `✅ 工作目录已切换为: ${absolute}\n📎 已恢复最近会话: ${latestId.slice(0, 8)}`, handled: true };
@@ -153,7 +158,7 @@ export function handleModel(ctx: CommandContext, args: string): CommandResult {
 }
 
 export function handleSession(ctx: CommandContext, args: string): CommandResult {
-  const cwd = ctx.session.workingDirectory;
+  const cwd = resolveEffectiveCwd(ctx.session.workingDirectory);
   const sub = args.trim().toLowerCase();
 
   // /session new — create a fresh session
