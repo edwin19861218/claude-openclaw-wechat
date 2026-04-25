@@ -614,8 +614,12 @@ async function sendToClaude(
       await sender.sendText(fromUserId, contextToken, 'ℹ️ Claude 无返回内容（可能因权限被拒而终止）');
     }
 
-    // Update session with new SDK session ID
-    session.sdkSessionId = result.sessionId || undefined;
+    // Update session with new SDK session ID (only when SDK returns a valid one;
+    // on permission denial/timeout, SDK may return empty sessionId — keep the old
+    // one so the next message resumes the same session instead of creating a new one)
+    if (result.sessionId) {
+      session.sdkSessionId = result.sessionId;
+    }
     session.useContinue = false;
     session.state = 'idle';
     sessionStore.save(account.accountId, session);
